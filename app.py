@@ -31,6 +31,14 @@ if "sl_device_data" not in st.session_state:
     st.session_state["sl_device_data"] = None   # cached device groups + devices
 if "sl_selected_devices" not in st.session_state:
     st.session_state["sl_selected_devices"] = []
+if "slp_device_data" not in st.session_state:
+    st.session_state["slp_device_data"] = None   # cached devices for the penalty flow
+if "slp_selected_devices" not in st.session_state:
+    st.session_state["slp_selected_devices"] = []
+if "slp_selected_geofences" not in st.session_state:
+    st.session_state["slp_selected_geofences"] = []
+if "slp_speed_limits" not in st.session_state:
+    st.session_state["slp_speed_limits"] = None  # final saved DataFrame
 
 
 def go_to(page):
@@ -683,6 +691,12 @@ elif page == "speed_limit_devices":
     show_speed_limit_devices()
 elif page == "speed_limit_generate":
     show_speed_limit_generate()
+elif page == "speed_limit_penalty_devices":
+    show_speed_limit_penalty_devices()
+elif page == "speed_limit_penalty_geofences":
+    show_speed_limit_penalty_geofences()
+elif page == "speed_limit_penalty_table":
+    show_speed_limit_penalty_table()
 elif page == "waypoint":
     show_placeholder("Waypoint Report")
 elif page == "report":
