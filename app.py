@@ -8,8 +8,18 @@ from auth import login
 from devices import get_devices, get_device_groups
 from geofences import get_geofences, get_geofence_groups
 from reports import get_reports, generate_report
-from report_processor import process_speed_limit_report, to_xlsx
-from device_names import filter_racing_devices, get_racer_class, unique_racer_classes
+from report_processor import (
+    process_speed_limit_report,
+    process_speed_limit_penalty_report,
+    to_xlsx,
+    to_styled_xlsx,
+)
+from device_names import (
+    filter_racing_devices,
+    get_racer_class,
+    parse_device_name,
+    unique_racer_classes,
+)
 from geofence_names import parse_geofence_name, speed_limit_from_name, DEFAULT_SPEED_LIMIT
 
 st.set_page_config(page_title="Gradev Racing App", layout="centered")
@@ -39,6 +49,31 @@ if "slp_selected_geofences" not in st.session_state:
     st.session_state["slp_selected_geofences"] = []
 if "slp_speed_limits" not in st.session_state:
     st.session_state["slp_speed_limits"] = None  # final saved DataFrame
+
+
+def _show_full_multiselect_labels():
+    """Stop multiselect chips from truncating long labels with an ellipsis.
+
+    BaseWeb caps the tag text width, which hides the tail of geofence names
+    (e.g. "SL_03_60_day 1..."). Let the tags grow and wrap instead.
+    """
+    st.markdown(
+        """
+        <style>
+        div[data-baseweb="select"] span[data-baseweb="tag"] {
+            max-width: none !important;
+            height: auto !important;
+        }
+        div[data-baseweb="select"] span[data-baseweb="tag"] span {
+            max-width: none !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+            white-space: normal !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def go_to(page):
@@ -88,16 +123,16 @@ def show_menu():
     st.write("Select the type of report you want to generate:")
     st.divider()
 
+    if st.button("Speed Limit Penalty Report", use_container_width=True, type="primary"):
+        go_to("speed_limit_penalty_devices")
+
     if st.button("Speed Limit Report", use_container_width=True):
         go_to("speed_limit")
-
-    if st.button("Speed Limit Penalty Report", use_container_width=True):
-        go_to("speed_limit_penalty_devices")
 
     if st.button("Waypoint Report", use_container_width=True):
         go_to("waypoint")
 
-    if st.button("General Report", use_container_width=True, type="primary"):
+    if st.button("General Report", use_container_width=True):
         go_to("report")
 
 
@@ -133,6 +168,8 @@ def show_speed_limit():
 
     st.title("Speed Limit Report")
 
+    _show_full_multiselect_labels()
+
     token = st.session_state["token"]
     data = load_sl_data(token)
     groups = data["groups"]
@@ -142,20 +179,20 @@ def show_speed_limit():
     col1, col2 = st.columns(2)
 
     with col1:
-        group_options = ["— All groups —"] + [g["title"] for g in groups]
-        selected_group_title = st.selectbox("Geofence Group", group_options)
-
-    # Resolve selected group id (None = no filter)
-    selected_group_id = None
-    if selected_group_title != "— All groups —":
-        selected_group_id = next(
-            g["id"] for g in groups if g["title"] == selected_group_title
+        selected_group_titles = st.multiselect(
+            "Geofence Groups",
+            [g["title"] for g in groups],
+            help="Leave empty to show every geofence. Selecting several groups "
+                 "shows the geofences of all of them.",
         )
 
-    # Filter geofences by group
-    if selected_group_id is not None:
+    # Geofences of all selected groups; no selection = no filter
+    if selected_group_titles:
+        selected_group_ids = {
+            str(g["id"]) for g in groups if g["title"] in selected_group_titles
+        }
         visible_geofences = [
-            gf for gf in all_geofences if str(gf.get("group_id")) == str(selected_group_id)
+            gf for gf in all_geofences if str(gf.get("group_id")) in selected_group_ids
         ]
     else:
         visible_geofences = all_geofences
@@ -468,6 +505,8 @@ def show_speed_limit_penalty_geofences():
 
     st.title("Select Geofences")
 
+    _show_full_multiselect_labels()
+
     token = st.session_state["token"]
     data = load_sl_data(token)
     groups = data["groups"]
@@ -477,20 +516,20 @@ def show_speed_limit_penalty_geofences():
     col1, col2 = st.columns(2)
 
     with col1:
-        group_options = ["— All groups —"] + [g["title"] for g in groups]
-        selected_group_title = st.selectbox("Geofence Group", group_options)
-
-    # Resolve selected group id (None = no filter)
-    selected_group_id = None
-    if selected_group_title != "— All groups —":
-        selected_group_id = next(
-            g["id"] for g in groups if g["title"] == selected_group_title
+        selected_group_titles = st.multiselect(
+            "Geofence Groups",
+            [g["title"] for g in groups],
+            help="Leave empty to show every geofence. Selecting several groups "
+                 "shows the geofences of all of them.",
         )
 
-    # Filter geofences by group
-    if selected_group_id is not None:
+    # Geofences of all selected groups; no selection = no filter
+    if selected_group_titles:
+        selected_group_ids = {
+            str(g["id"]) for g in groups if g["title"] in selected_group_titles
+        }
         visible_geofences = [
-            gf for gf in all_geofences if str(gf.get("group_id")) == str(selected_group_id)
+            gf for gf in all_geofences if str(gf.get("group_id")) in selected_group_ids
         ]
     else:
         visible_geofences = all_geofences
@@ -576,7 +615,152 @@ def show_speed_limit_penalty_table():
             rows.append(row)
 
         st.session_state["slp_speed_limits"] = pd.DataFrame(rows)
-        st.success("Speed limits saved.")
+        go_to("speed_limit_penalty_generate")
+
+
+# ════════════════════════════════════════════════════════════
+# SPEED LIMIT PENALTY REPORT — GENERATE
+# ════════════════════════════════════════════════════════════
+def _safe_filename(title):
+    """Turn a report title into a safe .xlsx file name."""
+    cleaned = "".join(c for c in title if c not in r'\/:*?"<>|').strip()
+    return f"{cleaned or 'speed_limit_penalty_report'}.xlsx"
+
+
+def show_speed_limit_penalty_generate():
+    if st.button("← Back"):
+        go_to("speed_limit_penalty_table")
+
+    st.title("Speed Limit Penalty Report")
+
+    speed_limits_df = st.session_state["slp_speed_limits"]
+    selected_devices = st.session_state["slp_selected_devices"]
+
+    if speed_limits_df is None or not selected_devices:
+        st.warning("Missing data. Please go back and complete the previous steps.")
+        return
+
+    # ── Date range ───────────────────────────────────────────
+    col1, col2 = st.columns(2)
+    with col1:
+        date_from = st.date_input("Date From", value=datetime.date.today())
+    with col2:
+        date_to = st.date_input("Date To", value=datetime.date.today(), min_value=date_from)
+
+    # ── Title (also the downloaded file name) ────────────────
+    title = st.text_input("Report Title", placeholder="Enter report title")
+
+    # ── Geofence speed limits (still editable) ───────────────
+    st.subheader("Geofence Speed Limits")
+    gf_df = speed_limits_df[["name", "speed_limit"]].copy()
+    gf_df.columns = ["Geofence Name", "Speed Limit"]
+
+    edited_gf = st.data_editor(
+        gf_df,
+        column_config={
+            "Geofence Name": st.column_config.TextColumn(disabled=True),
+            "Speed Limit": st.column_config.NumberColumn(
+                min_value=0,
+                max_value=999,
+                step=1,
+                format="%d km/h",
+                required=True,
+            ),
+        },
+        hide_index=True,
+        use_container_width=True,
+        key="slp_generate_speed_limits",
+    )
+
+    # ── Selected devices, split by naming convention ─────────
+    st.subheader("Selected Devices")
+    device_rows = []
+    for d in selected_devices:
+        parsed = parse_device_name(d["name"]) or {}
+        device_rows.append({
+            "Device Name": d["name"],
+            "Racing Number": parsed.get("racing_id", ""),
+            "Class": parsed.get("racer_class", ""),
+            "Pilot": parsed.get("pilot", ""),
+            "Copilot": parsed.get("copilot", ""),
+        })
+    st.dataframe(pd.DataFrame(device_rows), use_container_width=True, hide_index=True)
+
+    # ── Generate ─────────────────────────────────────────────
+    st.divider()
+    if st.button("Generate Report", use_container_width=True, type="primary"):
+        if not title.strip():
+            st.error("Please enter a report title.")
+        elif date_to < date_from:
+            st.error("Date To must be equal to or later than Date From.")
+        else:
+            # Apply any edits made on this page before generating
+            limits_df = speed_limits_df.copy()
+            limits_df["speed_limit"] = (
+                limits_df["name"]
+                .map(dict(zip(edited_gf["Geofence Name"], edited_gf["Speed Limit"])))
+                .astype(int)
+            )
+
+            token = st.session_state["token"]
+            geofence_ids = list(limits_df["id"].astype(int))
+            all_frames = []
+            error_msg = None
+
+            progress = st.progress(0, text="Starting…")
+            try:
+                for i, device in enumerate(selected_devices):
+                    progress.progress(
+                        i / len(selected_devices),
+                        text=f"Processing {device['name']} ({i + 1}/{len(selected_devices)})…",
+                    )
+                    url = generate_report(
+                        token,
+                        title=f"{title.strip()} – {device['name']}",
+                        report_type=53,
+                        format="xls",
+                        device_ids=[device["id"]],
+                        date_from=str(date_from),
+                        date_to=str(date_to),
+                        geofence_ids=geofence_ids,
+                    )
+                    if url is None:
+                        error_msg = f"No URL returned for device {device['name']}."
+                        break
+                    raw_bytes = requests.get(url).content
+                    df = process_speed_limit_penalty_report(
+                        raw_bytes, device["name"], limits_df
+                    )
+                    all_frames.append(df)
+
+                progress.progress(1.0, text="Done.")
+            except requests.exceptions.HTTPError as e:
+                try:
+                    error_msg = e.response.json().get("message", str(e))
+                except Exception:
+                    error_msg = str(e)
+            except Exception as e:
+                error_msg = str(e)
+
+            if error_msg:
+                st.error(f"Report generation failed: {error_msg}")
+            elif all_frames:
+                combined = pd.concat(all_frames, ignore_index=True)
+                xlsx_bytes = to_styled_xlsx(
+                    combined,
+                    sheet_name="Speed Limit Penalty",
+                    table_name="SpeedLimitPenalty",
+                )
+                st.success("Report ready!")
+                st.download_button(
+                    "Download Report",
+                    data=xlsx_bytes,
+                    file_name=_safe_filename(title.strip()),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            else:
+                st.warning("No geofence visits found for the selected devices and date range.")
 
 
 # ════════════════════════════════════════════════════════════
@@ -697,6 +881,8 @@ elif page == "speed_limit_penalty_geofences":
     show_speed_limit_penalty_geofences()
 elif page == "speed_limit_penalty_table":
     show_speed_limit_penalty_table()
+elif page == "speed_limit_penalty_generate":
+    show_speed_limit_penalty_generate()
 elif page == "waypoint":
     show_placeholder("Waypoint Report")
 elif page == "report":
