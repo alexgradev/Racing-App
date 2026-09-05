@@ -6,6 +6,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from device_names import parse_device_name
+from results_sheet import build_results_sheet
 
 HEADER_MARKER = "Име на геозона"
 
@@ -191,6 +192,33 @@ def _autofit_columns(worksheet, df: pd.DataFrame) -> None:
         worksheet.column_dimensions[get_column_letter(idx)].width = width
 
 
+def _write_styled_sheet(writer, df: pd.DataFrame, sheet_name: str,
+                        table_name: str) -> None:
+    """Write df to a sheet as an Excel table (Table Style Light 15)."""
+    df.to_excel(writer, index=False, sheet_name=sheet_name)
+    worksheet = writer.sheets[sheet_name]
+
+    for cell in worksheet[1]:
+        cell.font = Font(bold=True)
+
+    # An Excel table needs at least one data row
+    if not df.empty:
+        ref = f"A1:{get_column_letter(len(df.columns))}{len(df) + 1}"
+        table = Table(displayName=table_name, ref=ref)
+        table.tableStyleInfo = TableStyleInfo(
+            name="TableStyleLight15",
+            showRowStripes=True,      # alternating white / light grey rows
+            showColumnStripes=False,
+            showFirstColumn=False,
+            showLastColumn=False,
+        )
+        worksheet.add_table(table)
+    else:
+        worksheet.auto_filter.ref = f"A1:{get_column_letter(len(df.columns))}1"
+
+    _autofit_columns(worksheet, df)
+
+
 def to_styled_xlsx(df: pd.DataFrame, sheet_name: str = "Report",
                    table_name: str = "Report") -> bytes:
     """Write a DataFrame to XLSX bytes formatted as an Excel table.
@@ -200,27 +228,25 @@ def to_styled_xlsx(df: pd.DataFrame, sheet_name: str = "Report",
     """
     out = BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
-        worksheet = writer.sheets[sheet_name]
+        _write_styled_sheet(writer, df, sheet_name, table_name)
+    return out.getvalue()
 
-        for cell in worksheet[1]:
-            cell.font = Font(bold=True)
 
-        # An Excel table needs at least one data row
-        if not df.empty:
-            ref = f"A1:{get_column_letter(len(df.columns))}{len(df) + 1}"
-            table = Table(displayName=table_name, ref=ref)
-            table.tableStyleInfo = TableStyleInfo(
-                name="TableStyleLight15",
-                showRowStripes=True,      # alternating white / light grey rows
-                showColumnStripes=False,
-                showFirstColumn=False,
-                showLastColumn=False,
+def to_penalty_xlsx(penalty_df: pd.DataFrame, sheet_name: str = "Report",
+                    table_name: str = "Report", results_df=None,
+                    geofence_names=None) -> bytes:
+    """Write the penalty sheet, optionally followed by "Results Raw Data".
+
+    The penalty sheet is produced by the same code as to_styled_xlsx, so it is
+    unaffected by the presence of the results sheet.
+    """
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        _write_styled_sheet(writer, penalty_df, sheet_name, table_name)
+
+        if results_df is not None and not results_df.empty:
+            build_results_sheet(
+                writer.book, penalty_df, results_df, geofence_names or []
             )
-            worksheet.add_table(table)
-        else:
-            worksheet.auto_filter.ref = f"A1:{get_column_letter(len(df.columns))}1"
-
-        _autofit_columns(worksheet, df)
 
     return out.getvalue()
