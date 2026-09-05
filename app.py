@@ -24,7 +24,7 @@ from geofence_names import parse_geofence_name, speed_limit_from_name, DEFAULT_S
 
 st.set_page_config(page_title="Gradev Racing App", layout="centered")
 
-# ─── Session state defaults ──────────────────────────────────
+# Session state defaults 
 if "page" not in st.session_state:
     st.session_state["page"] = "login"
 if "token" not in st.session_state:
