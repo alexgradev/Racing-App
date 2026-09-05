@@ -13,7 +13,9 @@ from report_processor import (
     process_speed_limit_penalty_report,
     to_xlsx,
     to_styled_xlsx,
+    to_penalty_xlsx,
 )
+from results_sheet import time_difference
 from device_names import (
     filter_racing_devices,
     get_racer_class,
@@ -49,6 +51,10 @@ if "slp_selected_geofences" not in st.session_state:
     st.session_state["slp_selected_geofences"] = []
 if "slp_speed_limits" not in st.session_state:
     st.session_state["slp_speed_limits"] = None  # final saved DataFrame
+if "slp_results" not in st.session_state:
+    st.session_state["slp_results"] = None       # MACHINE / START / FINAL / TIME entries
+if "slp_time_manual" not in st.session_state:
+    st.session_state["slp_time_manual"] = {}     # device -> TIME was typed by hand
 
 
 def _show_full_multiselect_labels():
@@ -618,6 +624,83 @@ def show_speed_limit_penalty_table():
         go_to("speed_limit_penalty_generate")
 
 
+RESULTS_INPUT_COLUMNS = ["MACHINE", "START", "FINAL", "TIME"]
+
+
+def _results_editor(base_df):
+    """Show the Selected Devices table with the editable results columns.
+
+    TIME is derived from START and FINAL whenever both are valid HH:MM:SS, but
+    a value typed into TIME by hand wins and is kept even if START or FINAL
+    change afterwards. Clearing TIME hands the row back to the calculation.
+    """
+    manual = st.session_state["slp_time_manual"]
+
+    # Rebuild the working table, carrying over anything already typed in
+    stored = st.session_state["slp_results"]
+    previous = {}
+    if stored is not None and "Device Name" in stored:
+        previous = {row["Device Name"]: row for _, row in stored.iterrows()}
+
+    working = base_df.copy()
+    for column in RESULTS_INPUT_COLUMNS:
+        working[column] = [
+            str(previous.get(name, {}).get(column, "") or "")
+            for name in working["Device Name"]
+        ]
+
+    edited = st.data_editor(
+        working,
+        column_config={
+            "Device Name": st.column_config.TextColumn(disabled=True),
+            "Racing Number": st.column_config.TextColumn(disabled=True),
+            "Class": st.column_config.TextColumn(disabled=True),
+            "Pilot": st.column_config.TextColumn(disabled=True),
+            "Copilot": st.column_config.TextColumn(disabled=True),
+            "MACHINE": st.column_config.TextColumn(
+                help="Vehicle, in Latin or Cyrillic (e.g. Can-Am Maverick X3)",
+            ),
+            "START": st.column_config.TextColumn(help="HH:MM:SS"),
+            "FINAL": st.column_config.TextColumn(help="HH:MM:SS, or DNF"),
+            "TIME": st.column_config.TextColumn(
+                help="Calculated from START and FINAL. Type a value to override it, "
+                     "clear it to go back to the calculation.",
+            ),
+        },
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    # Recalculate TIME, respecting manual overrides
+    result = edited.copy()
+    auto_flags = []
+    for idx, row in edited.iterrows():
+        device = row["Device Name"]
+        auto = time_difference(row["START"], row["FINAL"])
+
+        typed = str(row["TIME"] or "").strip()
+        before = str(working.at[idx, "TIME"] or "").strip()
+        if typed != before:                      # the user just edited TIME
+            manual[device] = typed != ""         # clearing it resumes the calculation
+
+        if manual.get(device):
+            result.at[idx, "TIME"] = typed
+            auto_flags.append(False)
+        else:
+            result.at[idx, "TIME"] = auto
+            auto_flags.append(auto != "")
+
+    st.session_state["slp_results"] = result
+    result = result.copy()
+    result["TIME_IS_AUTO"] = auto_flags
+
+    # Show the freshly calculated TIME straight away
+    if not result[working.columns].equals(working):
+        st.rerun()
+
+    return result
+
+
 # ════════════════════════════════════════════════════════════
 # SPEED LIMIT PENALTY REPORT — GENERATE
 # ════════════════════════════════════════════════════════════
@@ -674,6 +757,13 @@ def show_speed_limit_penalty_generate():
 
     # ── Selected devices, split by naming convention ─────────
     st.subheader("Selected Devices")
+    produce_results = st.toggle(
+        "Produce Results Report",
+        value=False,
+        help='Adds a "Results Raw Data" sheet to the workbook and lets you enter '
+             "the machine and stage times for each crew.",
+    )
+
     device_rows = []
     for d in selected_devices:
         parsed = parse_device_name(d["name"]) or {}
@@ -684,7 +774,13 @@ def show_speed_limit_penalty_generate():
             "Pilot": parsed.get("pilot", ""),
             "Copilot": parsed.get("copilot", ""),
         })
-    st.dataframe(pd.DataFrame(device_rows), use_container_width=True, hide_index=True)
+    base_df = pd.DataFrame(device_rows)
+
+    if produce_results:
+        results_df = _results_editor(base_df)
+    else:
+        results_df = None
+        st.dataframe(base_df, use_container_width=True, hide_index=True)
 
     # ── Generate ─────────────────────────────────────────────
     st.divider()
@@ -746,10 +842,12 @@ def show_speed_limit_penalty_generate():
                 st.error(f"Report generation failed: {error_msg}")
             elif all_frames:
                 combined = pd.concat(all_frames, ignore_index=True)
-                xlsx_bytes = to_styled_xlsx(
+                xlsx_bytes = to_penalty_xlsx(
                     combined,
                     sheet_name="Speed Limit Penalty",
                     table_name="SpeedLimitPenalty",
+                    results_df=results_df,
+                    geofence_names=list(limits_df["name"]),
                 )
                 st.success("Report ready!")
                 st.download_button(
