@@ -1,0 +1,13 @@
+TASK:
+
+The goal of this app is to communicate with the Easy Tracking API and prepare a nice report for the organizer of the race. It should allow the user (the organizer) to select devices, geofences, manually change the speed limit, etc. 
+
+STEPS:
+
+1) The user should log in with Easy Tracking API credentials (currently implemented)
+
+2) Currently implemented is that the user sees 3 options (Speed Limit Report - working, Waypoint Report - under construction, General Report - working). A new report should be included for the user as well with name "Speed Limit Penalty Report"
+
+3) Speed Limit Penalty Report should first allow the user to select the devices (racers participating). There are some existing devices but the ones of interest are named as explained in names_template.txt. This page should show Device Group and Devices. When no device group is selected it should…
+
+4) Then in Speed Limit Penalty Report ...

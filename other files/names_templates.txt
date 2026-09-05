@@ -1,0 +1,27 @@
+==========================================================================================
+Device Name Template:
+XXX-CCC-PILOT / COPILOT
+
+XXX = racing id number (it is not mandatory that it is 3 characters, usually 3 or 4)
+CCC = class racer (it is not mandatory that it is 3 characters, can be 1 or 10 even)
+PILOT = name of the pilot, can include white space character (firstname familyname)
+COPILOT = name of the copilot, can include white space character (firstname familyname)
+
+examples:
+777-RR-ORGA6 / BEHKO
+103-St.-ИЛИЯ ТОШЕВ / ЖЕЛЬО ПОПОВ
+401-PROTO- ВИКТОР ВЕЛИКОВ / ВАСИЛ ВАСИЛЕВ
+
+==========================================================================================
+
+Geofence Name Template:
+SL XX_AA_day B_ccccc
+
+XX = number of SL (speed limit zone)
+AA = speed limit (in km/h, two digit number)
+day B = day where B is a single digit number
+ccccc = other helpful info, can include white space characters (e.g. varna 2025)
+
+examples:
+SL 03_60_day 1_varna 2024
+SL 13_30_day 2_Dobrich 2025
