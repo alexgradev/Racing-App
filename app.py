@@ -9,6 +9,8 @@ from devices import get_devices, get_device_groups
 from geofences import get_geofences, get_geofence_groups
 from reports import get_reports, generate_report
 from report_processor import process_speed_limit_report, to_xlsx
+from device_names import filter_racing_devices, get_racer_class, unique_racer_classes
+from geofence_names import parse_geofence_name, speed_limit_from_name, DEFAULT_SPEED_LIMIT
 
 st.set_page_config(page_title="Gradev Racing App", layout="centered")
 
@@ -80,6 +82,9 @@ def show_menu():
 
     if st.button("Speed Limit Report", use_container_width=True):
         go_to("speed_limit")
+
+    if st.button("Speed Limit Penalty Report", use_container_width=True):
+        go_to("speed_limit_penalty_devices")
 
     if st.button("Waypoint Report", use_container_width=True):
         go_to("waypoint")
@@ -376,6 +381,194 @@ def show_speed_limit_generate():
                 )
             else:
                 st.warning("No geofence visits found for the selected devices and date range.")
+
+
+# ════════════════════════════════════════════════════════════
+# SPEED LIMIT PENALTY REPORT — DEVICE SELECTION
+# ════════════════════════════════════════════════════════════
+def load_slp_device_data(token):
+    if st.session_state["slp_device_data"] is not None:
+        return st.session_state["slp_device_data"]
+
+    with st.spinner("Loading devices..."):
+        devices = get_devices(token)
+
+    st.session_state["slp_device_data"] = {"devices": devices}
+    return st.session_state["slp_device_data"]
+
+
+def show_speed_limit_penalty_devices():
+    if st.button("← Back"):
+        go_to("menu")
+
+    st.title("Speed Limit Penalty Report")
+    st.write("Select the racers participating in the event.")
+
+    token = st.session_state["token"]
+    all_devices = load_slp_device_data(token)["devices"]
+
+    # ── Naming-convention filter ─────────────────────────────
+    only_racing = st.checkbox(
+        "Show only devices following the racing naming convention "
+        "(XXX-CCC-PILOT / COPILOT)",
+        value=True,
+    )
+
+    if only_racing:
+        candidates = filter_racing_devices(all_devices)
+
+        classes = unique_racer_classes(candidates)
+        selected_class = st.selectbox("Racer Class", ["— All classes —"] + classes)
+
+        if selected_class != "— All classes —":
+            visible_devices = [
+                d for d in candidates if get_racer_class(d) == selected_class
+            ]
+        else:
+            visible_devices = candidates
+
+        if not candidates:
+            st.warning("No devices match the racing naming convention.")
+    else:
+        visible_devices = all_devices
+
+    # ── Device selection ─────────────────────────────────────
+    visible_devices = sorted(visible_devices, key=lambda d: d["name"])
+    device_options = [d["name"] for d in visible_devices]
+    selected_names = st.multiselect("Devices", device_options)
+
+    st.caption(f"{len(device_options)} device(s) available.")
+
+    # ── Button ───────────────────────────────────────────────
+    st.divider()
+    if st.button("Save Devices", use_container_width=True, type="primary"):
+        if not selected_names:
+            st.error("Please select at least one device.")
+        else:
+            st.session_state["slp_selected_devices"] = [
+                d for d in visible_devices if d["name"] in selected_names
+            ]
+            go_to("speed_limit_penalty_geofences")
+
+
+# ════════════════════════════════════════════════════════════
+# SPEED LIMIT PENALTY REPORT — GEOFENCE SELECTION
+# ════════════════════════════════════════════════════════════
+def show_speed_limit_penalty_geofences():
+    if st.button("← Back"):
+        go_to("speed_limit_penalty_devices")
+
+    st.title("Select Geofences")
+
+    token = st.session_state["token"]
+    data = load_sl_data(token)
+    groups = data["groups"]
+    all_geofences = data["geofences"]
+
+    # ── Group + geofence selectors side by side ──────────────
+    col1, col2 = st.columns(2)
+
+    with col1:
+        group_options = ["— All groups —"] + [g["title"] for g in groups]
+        selected_group_title = st.selectbox("Geofence Group", group_options)
+
+    # Resolve selected group id (None = no filter)
+    selected_group_id = None
+    if selected_group_title != "— All groups —":
+        selected_group_id = next(
+            g["id"] for g in groups if g["title"] == selected_group_title
+        )
+
+    # Filter geofences by group
+    if selected_group_id is not None:
+        visible_geofences = [
+            gf for gf in all_geofences if str(gf.get("group_id")) == str(selected_group_id)
+        ]
+    else:
+        visible_geofences = all_geofences
+
+    with col2:
+        gf_options = [gf["name"] for gf in visible_geofences]
+        selected_names = st.multiselect("Geofences", gf_options)
+
+    # ── Button ───────────────────────────────────────────────
+    st.divider()
+    if st.button("Define Speed Limits", use_container_width=True, type="primary"):
+        if not selected_names:
+            st.error("Please select at least one geofence.")
+        else:
+            selected_gf = [gf for gf in visible_geofences if gf["name"] in selected_names]
+            st.session_state["slp_selected_geofences"] = selected_gf
+            go_to("speed_limit_penalty_table")
+
+
+# ════════════════════════════════════════════════════════════
+# SPEED LIMIT PENALTY REPORT — SPEED LIMIT TABLE
+# ════════════════════════════════════════════════════════════
+def show_speed_limit_penalty_table():
+    if st.button("← Back"):
+        go_to("speed_limit_penalty_geofences")
+
+    st.title("Speed Limits")
+
+    selected_gf = st.session_state["slp_selected_geofences"]
+
+    if not selected_gf:
+        st.warning("No geofences selected. Go back and select at least one.")
+        return
+
+    # Speed limits are read from the geofence name (SL XX_AA_day B_ccccc);
+    # names that do not follow the convention fall back to the default.
+    selected_gf_sorted = sorted(selected_gf, key=lambda gf: gf["name"])
+    unparsed = [gf["name"] for gf in selected_gf_sorted
+                if parse_geofence_name(gf["name"]) is None]
+
+    df = pd.DataFrame({
+        "Geofence Name": [gf["name"] for gf in selected_gf_sorted],
+        "Speed Limit": [speed_limit_from_name(gf["name"]) for gf in selected_gf_sorted],
+    })
+
+    st.write(
+        "Speed limits were read from the geofence names. "
+        "Edit any value below if it is wrong."
+    )
+    if unparsed:
+        st.warning(
+            f"{len(unparsed)} geofence name(s) do not follow the naming convention "
+            f"(SL XX_AA_day B_ccccc or SL_XX_AA_day B_ccccc), "
+            f"so they default to {DEFAULT_SPEED_LIMIT} km/h: "
+            + ", ".join(unparsed)
+        )
+
+    edited_df = st.data_editor(
+        df,
+        column_config={
+            "Geofence Name": st.column_config.TextColumn(disabled=True),
+            "Speed Limit": st.column_config.NumberColumn(
+                min_value=0,
+                max_value=999,
+                step=1,
+                format="%d km/h",
+                required=True,
+            ),
+        },
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.divider()
+    if st.button("Save", use_container_width=True, type="primary"):
+        # Merge speed limits back with full geofence data
+        speed_limit_map = dict(zip(edited_df["Geofence Name"], edited_df["Speed Limit"]))
+
+        rows = []
+        for gf in selected_gf_sorted:
+            row = dict(gf)
+            row["speed_limit"] = int(speed_limit_map[gf["name"]])
+            rows.append(row)
+
+        st.session_state["slp_speed_limits"] = pd.DataFrame(rows)
+        st.success("Speed limits saved.")
 
 
 # ════════════════════════════════════════════════════════════
